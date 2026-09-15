@@ -1,0 +1,69 @@
+{
+  "id": "sql_data_sanitizer",
+  "name": "Data Sanitizer & PostgreSQL Exporter",
+  "description": "Ingests raw customer profile objects, extracts and formats required relational columns, and executes a parameterized PostgreSQL UPSERT statement.",
+  "nodes": [
+    {
+      "id": "sql-1",
+      "type": "triggerNode",
+      "position": { "x": 80, "y": 180 },
+      "data": {
+        "label": "User Signups Webhook",
+        "category": "trigger",
+        "subtype": "webhook",
+        "status": "idle",
+        "config": {
+          "endpoint": "/api/v1/auth/signup-events",
+          "method": "POST",
+          "mockPayload": "{\n  \"customer\": {\n    \"id\": \"usr_88291\",\n    \"name\": \"Elena Rostova\",\n    \"email\": \"elena.rostova@quantum-dynamics.ch\",\n    \"company\": \"Quantum Dynamics Labs\",\n    \"tier\": \"team_pro\"\n  },\n  \"metadata\": {\n    \"source\": \"self_service_checkout\"\n  }\n}"
+        }
+      }
+    },
+    {
+      "id": "sql-2",
+      "type": "transformNode",
+      "position": { "x": 480, "y": 180 },
+      "data": {
+        "label": "Schema Validator & Mapper",
+        "category": "transform",
+        "subtype": "transform_json",
+        "status": "idle",
+        "config": {
+          "mapping": "{\n  \"leadId\": \"{{customer.id}}\",\n  \"fullName\": \"{{customer.name}}\",\n  \"corporateEmail\": \"{{customer.email}}\",\n  \"organization\": \"{{customer.company}}\",\n  \"qualificationScore\": 92\n}"
+        }
+      }
+    },
+    {
+      "id": "sql-3",
+      "type": "outputNode",
+      "position": { "x": 880, "y": 180 },
+      "data": {
+        "label": "PostgreSQL Upsert",
+        "category": "output",
+        "subtype": "output_sql",
+        "status": "idle",
+        "config": {
+          "targetTable": "production_leads_vault",
+          "conflictKey": "external_id",
+          "generateUpsert": true
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "sql-e1",
+      "source": "sql-1",
+      "target": "sql-2",
+      "type": "pulseEdge",
+      "animated": false
+    },
+    {
+      "id": "sql-e2",
+      "source": "sql-2",
+      "target": "sql-3",
+      "type": "pulseEdge",
+      "animated": false
+    }
+  ]
+}

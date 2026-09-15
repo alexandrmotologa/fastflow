@@ -1,0 +1,117 @@
+{
+  "id": "order_fraud_triage",
+  "name": "Order Fraud Check & Dynamic Routing",
+  "description": "Evaluates incoming checkout transactions against risk thresholds, automatically branching between database fulfillment or an escalated Slack security alert.",
+  "nodes": [
+    {
+      "id": "ord-1",
+      "type": "triggerNode",
+      "position": { "x": 60, "y": 240 },
+      "data": {
+        "label": "Checkout Transaction",
+        "category": "trigger",
+        "subtype": "webhook",
+        "status": "idle",
+        "config": {
+          "endpoint": "/api/v1/payments/charge-attempt",
+          "method": "POST",
+          "mockPayload": "{\n  \"orderId\": \"ord_77491\",\n  \"customer\": {\n    \"name\": \"Devon Miles\",\n    \"email\": \"devon@foundation-law.org\",\n    \"company\": \"Knight Industries\"\n  },\n  \"transaction\": {\n    \"amount\": 8450,\n    \"currency\": \"USD\",\n    \"riskScore\": 88\n  }\n}"
+        }
+      }
+    },
+    {
+      "id": "ord-2",
+      "type": "transformNode",
+      "position": { "x": 420, "y": 240 },
+      "data": {
+        "label": "Flatten Order Fields",
+        "category": "transform",
+        "subtype": "transform_json",
+        "status": "idle",
+        "config": {
+          "mapping": "{\n  \"orderId\": \"{{orderId}}\",\n  \"fullName\": \"{{customer.name}}\",\n  \"corporateEmail\": \"{{customer.email}}\",\n  \"organization\": \"{{customer.company}}\",\n  \"amount\": \"{{transaction.amount}}\",\n  \"qualificationScore\": \"{{transaction.riskScore}}\"\n}"
+        }
+      }
+    },
+    {
+      "id": "ord-3",
+      "type": "logicNode",
+      "position": { "x": 780, "y": 240 },
+      "data": {
+        "label": "High Risk Threshold (>= 75)",
+        "category": "logic",
+        "subtype": "control_switch",
+        "status": "idle",
+        "config": {
+          "field": "qualificationScore",
+          "operator": ">=",
+          "threshold": 75
+        }
+      }
+    },
+    {
+      "id": "ord-4",
+      "type": "outputNode",
+      "position": { "x": 1180, "y": 120 },
+      "data": {
+        "label": "Security Incident Alert",
+        "category": "output",
+        "subtype": "output_slack",
+        "status": "idle",
+        "config": {
+          "channel": "#fraud-security-war-room",
+          "botName": "FastFlow Guardian",
+          "template": "⚠️ *High-Risk Order Quarantined!*\n• *Order:* {{orderId}}\n• *Amount:* ${{amount}}\n• *Customer:* {{fullName}} ({{organization}})\n• *Risk Score:* {{qualificationScore}}/100\n• *Status:* Flagged for manual fraud review"
+        }
+      }
+    },
+    {
+      "id": "ord-5",
+      "type": "outputNode",
+      "position": { "x": 1180, "y": 380 },
+      "data": {
+        "label": "Insert Cleared Order",
+        "category": "output",
+        "subtype": "output_sql",
+        "status": "idle",
+        "config": {
+          "targetTable": "verified_orders",
+          "conflictKey": "order_id",
+          "generateUpsert": true
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "ord-e1",
+      "source": "ord-1",
+      "target": "ord-2",
+      "type": "pulseEdge",
+      "animated": false
+    },
+    {
+      "id": "ord-e2",
+      "source": "ord-2",
+      "target": "ord-3",
+      "type": "pulseEdge",
+      "animated": false
+    },
+    {
+      "id": "ord-e3-true",
+      "source": "ord-3",
+      "target": "ord-4",
+      "sourceHandle": "true",
+      "type": "pulseEdge",
+      "animated": false
+    },
+    {
+      "id": "ord-e3-false",
+      "source": "ord-3",
+      "target": "ord-5",
+      "sourceHandle": "false",
+      "type": "pulseEdge",
+      "animated": false
+    }
+  ]
+}

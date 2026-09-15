@@ -1,0 +1,96 @@
+{
+  "id": "ai_lead_enrichment",
+  "name": "AI Lead Enrichment & Slack Dispatcher",
+  "description": "Ingests inbound prospect webhooks, parses corporate domain with regex, enriches company tier with Claude 3.5 Sonnet, and dispatches a notification to Slack.",
+  "nodes": [
+    {
+      "id": "node-1",
+      "type": "triggerNode",
+      "position": { "x": 60, "y": 200 },
+      "data": {
+        "label": "Inbound Lead Webhook",
+        "category": "trigger",
+        "subtype": "webhook",
+        "status": "idle",
+        "config": {
+          "endpoint": "/api/v1/leads/inbound",
+          "method": "POST",
+          "mockPayload": "{\n  \"customer\": {\n    \"id\": \"cust_87123\",\n    \"name\": \"Marcus Vance\",\n    \"email\": \"marcus.vance@vortex-defense.io\",\n    \"company\": \"Vortex Defense Systems\",\n    \"annualBudget\": 180000\n  },\n  \"metadata\": {\n    \"utm_source\": \"enterprise_demo_form\",\n    \"region\": \"North America\"\n  }\n}"
+        }
+      }
+    },
+    {
+      "id": "node-2",
+      "type": "transformNode",
+      "position": { "x": 420, "y": 200 },
+      "data": {
+        "label": "Parse Domain (Regex)",
+        "category": "transform",
+        "subtype": "transform_regex",
+        "status": "idle",
+        "config": {
+          "sourceField": "email",
+          "pattern": "^([^@]+)@([a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})$",
+          "captureFieldNames": "username, companyDomain",
+          "fallbackValue": "unknown-domain.com"
+        }
+      }
+    },
+    {
+      "id": "node-3",
+      "type": "actionNode",
+      "position": { "x": 780, "y": 200 },
+      "data": {
+        "label": "Claude 3.5 Intelligence",
+        "category": "action",
+        "subtype": "action_llm",
+        "status": "idle",
+        "config": {
+          "model": "claude-3-5-sonnet-20241022",
+          "temperature": 0.2,
+          "systemPrompt": "You are a sales operations AI assistant. Evaluate buyer intent and recommend AE account routing.",
+          "userPromptTemplate": "Analyze company {{company}} with domain {{companyDomain}}. Provide executive summary and strategic score."
+        }
+      }
+    },
+    {
+      "id": "node-4",
+      "type": "outputNode",
+      "position": { "x": 1140, "y": 200 },
+      "data": {
+        "label": "Notify Sales Channel",
+        "category": "output",
+        "subtype": "output_slack",
+        "status": "idle",
+        "config": {
+          "channel": "#enterprise-leads-live",
+          "botName": "FastFlow Sales Intel",
+          "template": "🎯 *New Enterprise Lead Qualified!*\n• *Account:* {{company}}\n• *Contact:* {{name}} <{{email}}>\n• *AI Score:* {{llmScore}}/100\n• *Classification:* Tier 1 Strategic Account\n• *Recommended Action:* Auto-assign to Enterprise Lead AE"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1-2",
+      "source": "node-1",
+      "target": "node-2",
+      "type": "pulseEdge",
+      "animated": false
+    },
+    {
+      "id": "e2-3",
+      "source": "node-2",
+      "target": "node-3",
+      "type": "pulseEdge",
+      "animated": false
+    },
+    {
+      "id": "e3-4",
+      "source": "node-3",
+      "target": "node-4",
+      "type": "pulseEdge",
+      "animated": false
+    }
+  ]
+}

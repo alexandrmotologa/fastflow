@@ -23,14 +23,19 @@ export interface ExecutionRunnerCallbacks {
   ) => void;
   onNodeError?: (nodeId: string, error: string, durationMs: number) => void;
   onNodeSkip?: (nodeId: string) => void;
+  onNodeRetry?: (nodeId: string, attempt: number, maxRetries: number) => void;
+  onBreakpointHit?: (nodeId: string) => void;
   onStageStart?: (stageIndex: number, nodeIds: string[]) => void;
   onStageComplete?: (stageIndex: number) => void;
   onEdgePulse?: (edgeId: string, active: boolean) => void;
+  onEdgeDataTransferred?: (edgeId: string, payload: Record<string, any>) => void;
 }
 
 export interface ExecutionOptions {
   simulationSpeed?: number; // 1 = normal, 2 = 2x faster, 0.5 = slower
   signal?: AbortSignal;
+  breakpoints?: Set<string>;
+  startFromStage?: number;
 }
 
 export class WorkflowExecutionEngine {
@@ -59,7 +64,7 @@ export class WorkflowExecutionEngine {
   public async runWorkflow(
     runId = `run_${Date.now()}`,
     options: ExecutionOptions = {}
-  ): Promise<{ success: boolean; traces: ExecutionTrace[] }> {
+  ): Promise<{ success: boolean; pausedAtBreakpoint?: string; traces: ExecutionTrace[] }> {
     const dagResult = resolveDAG(this.nodes, this.edges);
 
     if (dagResult.hasCycle) {
@@ -72,13 +77,33 @@ export class WorkflowExecutionEngine {
 
     const { stages } = dagResult;
     const speed = options.simulationSpeed || 1;
+    const startStage = options.startFromStage || 0;
 
-    for (let stageIdx = 0; stageIdx < stages.length; stageIdx++) {
+    for (let stageIdx = startStage; stageIdx < stages.length; stageIdx++) {
       if (options.signal?.aborted) {
         return { success: false, traces: this.traces };
       }
 
       const stageNodeIds = stages[stageIdx];
+
+      // Check if any node in this wave hits an active breakpoint
+      const breakpointNodeId = stageNodeIds.find((id) => {
+        const node = this.nodes.find((n) => n.id === id);
+        return (
+          node?.data.hasBreakpoint ||
+          (options.breakpoints && options.breakpoints.has(id))
+        );
+      });
+
+      if (breakpointNodeId && stageIdx > startStage) {
+        this.callbacks.onBreakpointHit?.(breakpointNodeId);
+        return {
+          success: true,
+          pausedAtBreakpoint: breakpointNodeId,
+          traces: this.traces,
+        };
+      }
+
       this.callbacks.onStageStart?.(stageIdx, stageNodeIds);
 
       // Execute all nodes in this topological wave concurrently
@@ -86,22 +111,24 @@ export class WorkflowExecutionEngine {
         this.executeNode(nodeId, stageIdx, runId, options)
       );
 
-      const results = await Promise.allSettled(stagePromises);
+      await Promise.allSettled(stagePromises);
 
-      // Pulse the outgoing edges from finished nodes to visual downstreams
+      // Transfer data along edges & trigger edge pulses
       for (const nodeId of stageNodeIds) {
         const outEdges = this.edges.filter((e) => e.source === nodeId);
+        const nodeOutput = this.nodeOutputs.get(nodeId) || {};
+        const selectedHandle = this.activeBranchHandles.get(nodeId);
+
         for (const edge of outEdges) {
-          const selectedHandle = this.activeBranchHandles.get(nodeId);
-          // If the node had a branch handle (like true/false) only pulse that handle's edge
           if (!selectedHandle || !edge.sourceHandle || edge.sourceHandle === selectedHandle) {
             this.callbacks.onEdgePulse?.(edge.id, true);
+            this.callbacks.onEdgeDataTransferred?.(edge.id, nodeOutput);
           }
         }
       }
 
-      // Small simulated transport duration
-      await new Promise((r) => setTimeout(r, Math.max(100, 300 / speed)));
+      // Simulated transport duration scaled by simulation speed
+      await new Promise((r) => setTimeout(r, Math.max(80, 300 / speed)));
 
       // Turn off edge pulses
       for (const nodeId of stageNodeIds) {
@@ -112,14 +139,6 @@ export class WorkflowExecutionEngine {
       }
 
       this.callbacks.onStageComplete?.(stageIdx);
-
-      // Check for hard errors
-      const hasFailure = results.some(
-        (r) => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value)
-      );
-      if (hasFailure) {
-        // Can continue or fail based on policy
-      }
     }
 
     const isAllSuccess = !this.traces.some((t) => t.status === 'failed');
@@ -127,7 +146,7 @@ export class WorkflowExecutionEngine {
   }
 
   /**
-   * Execute a single node in the DAG.
+   * Execute a single node in the DAG with retry logic and chaos testing support.
    */
   public async executeNode(
     nodeId: string,
@@ -143,7 +162,6 @@ export class WorkflowExecutionEngine {
     let shouldSkip = false;
 
     if (incomingEdges.length > 0) {
-      // Check if any incoming edge is active
       const activeIncomingEdges = incomingEdges.filter((edge) => {
         const parentBranch = this.activeBranchHandles.get(edge.source);
         if (parentBranch && edge.sourceHandle && edge.sourceHandle !== parentBranch) {
@@ -187,9 +205,7 @@ export class WorkflowExecutionEngine {
     this.callbacks.onNodeStart?.(nodeId, stageIndex);
     this.nodeStatuses.set(nodeId, 'running');
 
-    const startTime = performance.now();
     const nodeDef = getNodeDefinition(node.data.subtype);
-
     if (!nodeDef) {
       const errorMsg = `No executor registered for node subtype: ${node.data.subtype}`;
       this.callbacks.onNodeError?.(nodeId, errorMsg, 0);
@@ -210,69 +226,95 @@ export class WorkflowExecutionEngine {
       return false;
     }
 
-    try {
-      const result = await nodeDef.execute({
-        nodeId,
-        config: node.data.config || {},
-        inputs: mergedInputs,
-        signal: options.signal,
-      });
+    const maxRetries = node.data.retryConfig?.maxRetries || 0;
+    const retryDelay = node.data.retryConfig?.delayMs || 300;
+    let attempt = 0;
+    let lastError: any = null;
 
-      const durationMs = Math.round(performance.now() - startTime);
+    while (attempt <= maxRetries) {
+      const startTime = performance.now();
 
-      this.nodeOutputs.set(nodeId, result.outputs);
-      this.nodeStatuses.set(nodeId, 'success');
+      try {
+        // Chaos Testing: Artificial failure injection
+        if (node.data.chaosConfig?.simulateFailure) {
+          throw new Error(
+            node.data.chaosConfig.failureError ||
+              'Simulated Failure (Chaos Testing injected 500 error)'
+          );
+        }
 
-      if (result.branchTargetHandle) {
-        this.activeBranchHandles.set(nodeId, result.branchTargetHandle);
+        const result = await nodeDef.execute({
+          nodeId,
+          config: node.data.config || {},
+          inputs: mergedInputs,
+          signal: options.signal,
+        });
+
+        const durationMs = Math.round(performance.now() - startTime);
+
+        this.nodeOutputs.set(nodeId, result.outputs);
+        this.nodeStatuses.set(nodeId, 'success');
+
+        if (result.branchTargetHandle) {
+          this.activeBranchHandles.set(nodeId, result.branchTargetHandle);
+        }
+
+        this.callbacks.onNodeComplete?.(
+          nodeId,
+          result.outputs,
+          durationMs,
+          result.logs || []
+        );
+
+        this.traces.push({
+          id: `tr_${Date.now()}_${nodeId}`,
+          runId,
+          timestamp: Date.now(),
+          nodeId,
+          nodeLabel: node.data.label,
+          category: node.data.category,
+          subtype: node.data.subtype,
+          status: 'success',
+          inputs: mergedInputs,
+          outputs: result.outputs,
+          durationMs,
+          stage: stageIndex,
+        });
+
+        return true;
+      } catch (err: any) {
+        lastError = err;
+        attempt++;
+
+        if (attempt <= maxRetries) {
+          this.callbacks.onNodeRetry?.(nodeId, attempt, maxRetries);
+          const backoff = retryDelay * Math.pow(1.5, attempt - 1);
+          await new Promise((r) => setTimeout(r, backoff));
+        }
       }
-
-      this.callbacks.onNodeComplete?.(
-        nodeId,
-        result.outputs,
-        durationMs,
-        result.logs || []
-      );
-
-      this.traces.push({
-        id: `tr_${Date.now()}_${nodeId}`,
-        runId,
-        timestamp: Date.now(),
-        nodeId,
-        nodeLabel: node.data.label,
-        category: node.data.category,
-        subtype: node.data.subtype,
-        status: 'success',
-        inputs: mergedInputs,
-        outputs: result.outputs,
-        durationMs,
-        stage: stageIndex,
-      });
-
-      return true;
-    } catch (err: any) {
-      const durationMs = Math.round(performance.now() - startTime);
-      const errorMsg = err?.message || 'Execution error';
-
-      this.nodeStatuses.set(nodeId, 'failed');
-      this.callbacks.onNodeError?.(nodeId, errorMsg, durationMs);
-
-      this.traces.push({
-        id: `tr_${Date.now()}_${nodeId}`,
-        runId,
-        timestamp: Date.now(),
-        nodeId,
-        nodeLabel: node.data.label,
-        category: node.data.category,
-        subtype: node.data.subtype,
-        status: 'failed',
-        inputs: mergedInputs,
-        error: errorMsg,
-        durationMs,
-        stage: stageIndex,
-      });
-
-      return false;
     }
+
+    const durationMs = 0;
+    const errorMsg = lastError?.message || 'Execution error';
+
+    this.nodeStatuses.set(nodeId, 'failed');
+    this.callbacks.onNodeError?.(nodeId, errorMsg, durationMs);
+
+    this.traces.push({
+      id: `tr_${Date.now()}_${nodeId}`,
+      runId,
+      timestamp: Date.now(),
+      nodeId,
+      nodeLabel: node.data.label,
+      category: node.data.category,
+      subtype: node.data.subtype,
+      status: 'failed',
+      inputs: mergedInputs,
+      error: errorMsg,
+      durationMs,
+      stage: stageIndex,
+    });
+
+    return false;
   }
 }

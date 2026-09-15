@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import {
   Play,
   RotateCcw,
@@ -10,6 +10,10 @@ import {
   Layers,
   Github,
   Zap,
+  Undo2,
+  Redo2,
+  Sparkles,
+  FileCode2,
 } from 'lucide-react';
 import { useFlowStore } from '../store/useFlowStore';
 import { builtInTemplates } from '../templates';
@@ -29,9 +33,40 @@ export const Header: React.FC = () => {
   const isDebuggerOpen = useFlowStore((state) => state.isDebuggerOpen);
   const toggleDebugger = useFlowStore((state) => state.toggleDebugger);
   const exportWorkflow = useFlowStore((state) => state.exportWorkflow);
+  const exportStandaloneScript = useFlowStore((state) => state.exportStandaloneScript);
   const importWorkflow = useFlowStore((state) => state.importWorkflow);
+  const autoLayout = useFlowStore((state) => state.autoLayout);
+  const undo = useFlowStore((state) => state.undo);
+  const redo = useFlowStore((state) => state.redo);
+  const past = useFlowStore((state) => state.past);
+  const future = useFlowStore((state) => state.future);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Keyboard shortcut support for Undo / Redo
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Avoid intercepting inside inputs or textareas
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        if (e.shiftKey) {
+          e.preventDefault();
+          redo();
+        } else {
+          e.preventDefault();
+          undo();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo]);
 
   const handleExport = () => {
     const jsonStr = exportWorkflow();
@@ -40,6 +75,17 @@ export const Header: React.FC = () => {
     const a = document.createElement('a');
     a.href = url;
     a.download = `fastflow_workflow_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportTs = () => {
+    const tsCode = exportStandaloneScript();
+    const blob = new Blob([tsCode], { type: 'text/typescript' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fastflow_pipeline_${Date.now()}.ts`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -142,6 +188,36 @@ export const Header: React.FC = () => {
           <RotateCcw className="w-3.5 h-3.5" />
         </button>
 
+        <div className="h-4 w-[1px] bg-slate-800" />
+
+        {/* Undo / Redo Controls */}
+        <button
+          onClick={undo}
+          disabled={past.length === 0}
+          className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
+          title={`Undo change (Ctrl+Z) [${past.length} in history]`}
+        >
+          <Undo2 className="w-3.5 h-3.5" />
+        </button>
+
+        <button
+          onClick={redo}
+          disabled={future.length === 0}
+          className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
+          title={`Redo change (Ctrl+Y) [${future.length} available]`}
+        >
+          <Redo2 className="w-3.5 h-3.5" />
+        </button>
+
+        <button
+          onClick={() => autoLayout('LR')}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs transition-colors"
+          title="Auto-organize graph layout using Dagre"
+        >
+          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+          <span>Auto Layout</span>
+        </button>
+
         {/* Speed presets */}
         <div className="flex items-center bg-slate-900 rounded-lg p-0.5 border border-slate-800 text-[11px] font-mono">
           {[0.5, 1, 2].map((s) => (
@@ -196,6 +272,15 @@ export const Header: React.FC = () => {
         >
           <Download className="w-3.5 h-3.5" />
           <span>Export</span>
+        </button>
+
+        <button
+          onClick={handleExportTs}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-emerald-400 hover:text-emerald-300 text-xs transition-colors"
+          title="Export as Standalone Executable TypeScript Script"
+        >
+          <FileCode2 className="w-3.5 h-3.5" />
+          <span>Export TS</span>
         </button>
 
         <div className="h-4 w-[1px] bg-slate-800" />

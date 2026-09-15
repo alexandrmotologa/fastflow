@@ -7,6 +7,7 @@ export type NodeSubtype =
   | 'cron'
   | 'transform_json'
   | 'transform_regex'
+  | 'transform_code'
   | 'action_llm'
   | 'action_http'
   | 'control_switch'
@@ -26,6 +27,15 @@ export interface FastFlowNodeData {
   durationMs?: number;
   executionStage?: number;
   lastExecutedAt?: number;
+  hasBreakpoint?: boolean;
+  retryConfig?: {
+    maxRetries: number;
+    delayMs: number;
+  };
+  chaosConfig?: {
+    simulateFailure: boolean;
+    failureError?: string;
+  };
   [key: string]: any;
 }
 

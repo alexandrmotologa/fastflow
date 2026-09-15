@@ -1,4 +1,5 @@
 import { DAGResolutionResult } from './types';
+import dagre from 'dagre';
 
 export interface MinimalNode {
   id: string;
@@ -117,4 +118,48 @@ export function getParentNodeIds(targetId: string, edges: MinimalEdge[]): string
  */
 export function getChildNodeIds(sourceId: string, edges: MinimalEdge[]): string[] {
   return edges.filter((e) => e.source === sourceId).map((e) => e.target);
+}
+
+export interface LayoutableNode {
+  id: string;
+  position: { x: number; y: number };
+  [key: string]: any;
+}
+
+/**
+ * Automatically computes clean, non-overlapping coordinates for all nodes
+ * in the DAG using the Dagre rank-based layout algorithm.
+ */
+export function applyDagreLayout<T extends LayoutableNode, E extends MinimalEdge>(
+  nodes: T[],
+  edges: E[],
+  direction: 'LR' | 'TB' = 'LR'
+): T[] {
+  const dagreGraph = new dagre.graphlib.Graph();
+  dagreGraph.setDefaultEdgeLabel(() => ({}));
+  dagreGraph.setGraph({ rankdir: direction, nodesep: 60, ranksep: 100 });
+
+  const nodeWidth = 260;
+  const nodeHeight = 120;
+
+  nodes.forEach((node) => {
+    dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
+  });
+
+  edges.forEach((edge) => {
+    dagreGraph.setEdge(edge.source, edge.target);
+  });
+
+  dagre.layout(dagreGraph);
+
+  return nodes.map((node) => {
+    const nodeWithPos = dagreGraph.node(node.id);
+    return {
+      ...node,
+      position: {
+        x: Math.round(nodeWithPos.x - nodeWidth / 2),
+        y: Math.round(nodeWithPos.y - nodeHeight / 2),
+      },
+    };
+  });
 }

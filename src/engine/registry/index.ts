@@ -3,6 +3,7 @@ import { triggerWebhookNode } from './trigger_webhook';
 import { triggerCronNode } from './trigger_cron';
 import { transformJsonNode } from './transform_json';
 import { transformRegexNode } from './transform_regex';
+import { transformCodeNode } from './transform_code';
 import { actionLlmNode } from './action_llm';
 import { actionHttpNode } from './action_http';
 import { controlSwitchNode } from './control_switch';
@@ -14,6 +15,7 @@ export const nodeRegistry: Record<NodeSubtype, NodeDefinition> = {
   cron: triggerCronNode,
   transform_json: transformJsonNode,
   transform_regex: transformRegexNode,
+  transform_code: transformCodeNode,
   action_llm: actionLlmNode,
   action_http: actionHttpNode,
   control_switch: controlSwitchNode,

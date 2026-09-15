@@ -4,6 +4,7 @@ import {
   Activity,
   AlertCircle,
   CheckCircle2,
+  CircleDot,
   Clock,
   Trash2,
 } from 'lucide-react';
@@ -66,6 +67,7 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
 }) => {
   const selectNode = useFlowStore((state) => state.selectNode);
   const deleteNode = useFlowStore((state) => state.deleteNode);
+  const toggleBreakpoint = useFlowStore((state) => state.toggleBreakpoint);
 
   const statusInfo = statusConfig[data.status] || statusConfig.idle;
 
@@ -81,9 +83,21 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
           ? 'border-rose-500/80 shadow-rose-500/10'
           : data.status === 'success'
           ? 'border-emerald-500/50 hover:border-emerald-400'
+          : data.hasBreakpoint
+          ? 'border-rose-500/40 shadow-rose-950/40'
           : 'border-slate-800 hover:border-slate-700'
       }`}
     >
+      {/* Visual Breakpoint Active Indicator */}
+      {data.hasBreakpoint && (
+        <div
+          className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 rounded-full bg-rose-600 border-2 border-slate-950 flex items-center justify-center shadow-lg shadow-rose-600/60 z-20"
+          title="Breakpoint Active: Engine will pause before running this node"
+        >
+          <div className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+        </div>
+      )}
+
       {/* Input Handle */}
       {hasInputHandle && (
         <Handle
@@ -112,17 +126,39 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
           </div>
         </div>
 
-        {/* Delete node quick icon */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            deleteNode(id);
-          }}
-          className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-rose-400 transition-opacity rounded hover:bg-slate-800"
-          title="Delete node"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
+        <div className="flex items-center gap-1">
+          {/* Breakpoint toggle button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleBreakpoint(id);
+            }}
+            className={`p-1 rounded transition-all ${
+              data.hasBreakpoint
+                ? 'text-rose-400 bg-rose-950/70 border border-rose-500/50 shadow-sm shadow-rose-500/50 opacity-100'
+                : 'opacity-0 group-hover:opacity-100 text-slate-500 hover:text-rose-400 hover:bg-slate-800'
+            }`}
+            title={data.hasBreakpoint ? 'Remove Breakpoint' : 'Set Breakpoint (Pauses execution here)'}
+          >
+            <CircleDot
+              className={`w-3.5 h-3.5 ${
+                data.hasBreakpoint ? 'fill-rose-500 text-rose-500' : ''
+              }`}
+            />
+          </button>
+
+          {/* Delete node quick icon */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              deleteNode(id);
+            }}
+            className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-rose-400 transition-opacity rounded hover:bg-slate-800"
+            title="Delete node"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Body content */}

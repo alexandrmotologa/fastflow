@@ -1,13 +1,27 @@
 import React, { useState } from 'react';
-import { X, Sliders, PlayCircle, Trash2, CheckCircle2, AlertCircle } from 'lucide-react';
+import {
+  X,
+  Sliders,
+  PlayCircle,
+  Trash2,
+  CheckCircle2,
+  AlertCircle,
+  CircleDot,
+  RotateCw,
+  ShieldAlert,
+  Code2,
+} from 'lucide-react';
 import { useFlowStore } from '../store/useFlowStore';
+import { WEBHOOK_PRESETS, WebhookPreset } from '../engine/presets';
 
 export const NodeConfigDrawer: React.FC = () => {
   const selectedNodeId = useFlowStore((state) => state.selectedNodeId);
   const nodes = useFlowStore((state) => state.nodes);
   const closeDrawer = useFlowStore((state) => state.closeDrawer);
   const updateNodeConfig = useFlowStore((state) => state.updateNodeConfig);
+  const updateNodeData = useFlowStore((state) => state.updateNodeData);
   const updateNodeLabel = useFlowStore((state) => state.updateNodeLabel);
+  const toggleBreakpoint = useFlowStore((state) => state.toggleBreakpoint);
   const deleteNode = useFlowStore((state) => state.deleteNode);
 
   const [activeTab, setActiveTab] = useState<'config' | 'outputs'>('config');
@@ -97,6 +111,32 @@ export const NodeConfigDrawer: React.FC = () => {
             {/* Subtype-specific configurations */}
             {data.subtype === 'webhook' && (
               <>
+                <div>
+                  <label className="block text-slate-400 font-mono text-[11px] mb-1">
+                    LOAD PRESET TEMPLATE
+                  </label>
+                  <select
+                    defaultValue=""
+                    onChange={(e) => {
+                      const preset = WEBHOOK_PRESETS.find((p: WebhookPreset) => p.id === e.target.value);
+                      if (preset) {
+                        handleConfigChange('mockPayload', JSON.stringify(preset.payload, null, 2));
+                        handleConfigChange('endpoint', preset.endpoint);
+                      }
+                    }}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 mb-2 cursor-pointer"
+                  >
+                    <option value="" disabled>
+                      -- Choose a Webhook Preset (Stripe, GitHub, Shopify, etc.) --
+                    </option>
+                    {WEBHOOK_PRESETS.map((p: WebhookPreset) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div>
                   <label className="block text-slate-400 font-mono text-[11px] mb-1">
                     ENDPOINT URL
@@ -223,6 +263,34 @@ export const NodeConfigDrawer: React.FC = () => {
                   />
                 </div>
               </>
+            )}
+
+            {data.subtype === 'transform_code' && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-slate-400 font-mono text-[11px] flex items-center gap-1.5">
+                    <Code2 className="w-3.5 h-3.5 text-emerald-400" />
+                    JAVASCRIPT CODE
+                  </label>
+                  <span className="text-[10px] text-emerald-400 font-mono bg-emerald-950/60 px-1 rounded border border-emerald-800/50">
+                    Safe Browser Sandbox
+                  </span>
+                </div>
+                <textarea
+                  rows={10}
+                  value={
+                    config.code !== undefined
+                      ? config.code
+                      : '// Transform input payload and return an object\nreturn {\n  ...input,\n  processedAt: new Date().toISOString(),\n  status: "verified"\n};'
+                  }
+                  onChange={(e) => handleConfigChange('code', e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg p-3 text-emerald-300 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none leading-relaxed"
+                  placeholder="return { ...input, timestamp: Date.now() };"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Available in scope: <code className="text-slate-300">input</code> (upstream node data) and <code className="text-slate-300">context</code>. Must return a valid JavaScript Object.
+                </p>
+              </div>
             )}
 
             {data.subtype === 'action_llm' && (
@@ -395,6 +463,140 @@ export const NodeConfigDrawer: React.FC = () => {
                 </div>
               </>
             )}
+
+            {/* Reliability, Retry Policy & Chaos Testing Section */}
+            <div className="pt-4 mt-6 border-t border-slate-800/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-[11px] font-semibold text-slate-300 flex items-center gap-1.5">
+                  <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                  RELIABILITY & SIMULATION POLICIES
+                </span>
+              </div>
+
+              {/* Breakpoint Setting */}
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                <div className="flex items-center gap-2">
+                  <CircleDot className={`w-4 h-4 ${data.hasBreakpoint ? 'text-rose-500 fill-rose-500' : 'text-slate-500'}`} />
+                  <div>
+                    <div className="text-xs font-medium text-slate-200">Execution Breakpoint</div>
+                    <div className="text-[10px] text-slate-400">Pause simulation before running this node</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => toggleBreakpoint(selectedNode.id)}
+                  className={`px-2.5 py-1 rounded text-[11px] font-mono font-medium transition-colors ${
+                    data.hasBreakpoint
+                      ? 'bg-rose-600 text-white shadow-sm shadow-rose-600/50'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  {data.hasBreakpoint ? 'Active' : 'Disabled'}
+                </button>
+              </div>
+
+              {/* Retry Policy */}
+              <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-slate-200 flex items-center gap-1.5">
+                    <RotateCw className="w-3.5 h-3.5 text-blue-400" />
+                    Retry Policy (Exponential Backoff)
+                  </span>
+                  <span className="text-[10px] font-mono text-blue-400">
+                    {data.retryConfig?.maxRetries || 0} retries
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div>
+                    <label className="block text-slate-400 font-mono text-[10px] mb-1">
+                      MAX RETRIES (0-5)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={5}
+                      value={data.retryConfig?.maxRetries ?? 0}
+                      onChange={(e) =>
+                        updateNodeData(selectedNode.id, {
+                          retryConfig: {
+                            maxRetries: Math.max(0, Math.min(5, parseInt(e.target.value) || 0)),
+                            delayMs: data.retryConfig?.delayMs ?? 300,
+                          },
+                        })
+                      }
+                      className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 font-mono text-[10px] mb-1">
+                      BASE DELAY (MS)
+                    </label>
+                    <input
+                      type="number"
+                      min={50}
+                      step={100}
+                      value={data.retryConfig?.delayMs ?? 300}
+                      onChange={(e) =>
+                        updateNodeData(selectedNode.id, {
+                          retryConfig: {
+                            maxRetries: data.retryConfig?.maxRetries ?? 0,
+                            delayMs: Math.max(50, parseInt(e.target.value) || 300),
+                          },
+                        })
+                      }
+                      className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-slate-200 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Chaos Engineering: Artificial Failure Injection */}
+              <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-slate-200 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-rose-500" />
+                    Chaos Testing (Simulated Outage)
+                  </span>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!data.chaosConfig?.simulateFailure}
+                      onChange={(e) =>
+                        updateNodeData(selectedNode.id, {
+                          chaosConfig: {
+                            simulateFailure: e.target.checked,
+                            failureError: data.chaosConfig?.failureError || 'Simulated upstream dependency timeout (Chaos)',
+                          },
+                        })
+                      }
+                      className="sr-only peer"
+                    />
+                    <div className="w-8 h-4 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-rose-600"></div>
+                  </label>
+                </div>
+                {data.chaosConfig?.simulateFailure && (
+                  <div className="pt-1">
+                    <label className="block text-slate-400 font-mono text-[10px] mb-1">
+                      SIMULATED ERROR REASON
+                    </label>
+                    <input
+                      type="text"
+                      value={data.chaosConfig?.failureError || ''}
+                      onChange={(e) =>
+                        updateNodeData(selectedNode.id, {
+                          chaosConfig: {
+                            simulateFailure: true,
+                            failureError: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder="e.g. 504 Gateway Timeout (Chaos test)"
+                      className="w-full bg-slate-950 border border-rose-900/50 rounded px-2 py-1 text-rose-300 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-rose-500"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         ) : (
           /* Outputs Tab */

@@ -17,8 +17,14 @@ import {
 } from '../engine/types';
 import { getNodeDefinition } from '../engine/registry';
 import { WorkflowExecutionEngine } from '../engine/execution_runner';
-import { resolveDAG } from '../engine/dag_resolver';
+import { resolveDAG, applyDagreLayout } from '../engine/dag_resolver';
+import { generateStandaloneScript } from '../engine/codegen';
 import { builtInTemplates, getTemplateById } from '../templates';
+
+interface HistorySnapshot {
+  nodes: Node<FastFlowNodeData>[];
+  edges: Edge[];
+}
 
 export interface FlowState {
   nodes: Node<FastFlowNodeData>[];
@@ -34,6 +40,11 @@ export interface FlowState {
   traces: ExecutionTrace[];
   logs: string[];
   activePulsingEdges: Set<string>;
+  edgeData: Record<string, Record<string, any>>;
+
+  // History for Undo/Redo
+  past: HistorySnapshot[];
+  future: HistorySnapshot[];
 
   // Internal abort controller for canceling simulation
   abortController: AbortController | null;
@@ -45,7 +56,9 @@ export interface FlowState {
   selectNode: (nodeId: string | null) => void;
   closeDrawer: () => void;
   toggleDebugger: () => void;
+  toggleBreakpoint: (nodeId: string) => void;
   updateNodeConfig: (nodeId: string, newConfig: Record<string, any>) => void;
+  updateNodeData: (nodeId: string, partialData: Partial<FastFlowNodeData>) => void;
   updateNodeLabel: (nodeId: string, label: string) => void;
   deleteNode: (nodeId: string) => void;
   addNode: (subtype: NodeSubtype, position?: { x: number; y: number }) => void;
@@ -55,11 +68,17 @@ export interface FlowState {
   runSimulation: () => Promise<void>;
   stepSimulation: () => Promise<void>;
   stopSimulation: () => void;
+  autoLayout: (direction?: 'LR' | 'TB') => void;
+  undo: () => void;
+  redo: () => void;
   exportWorkflow: () => string;
+  exportStandaloneScript: () => string;
   importWorkflow: (jsonStr: string) => boolean;
 }
 
 const defaultTemplate = builtInTemplates[0];
+
+const MAX_HISTORY = 30;
 
 export const useFlowStore = create<FlowState>((set, get) => ({
   nodes: (defaultTemplate?.nodes as Node<FastFlowNodeData>[]) || [],
@@ -75,6 +94,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   traces: [],
   logs: [`[System] FastFlow Studio ready. Loaded template: ${defaultTemplate?.name}`],
   activePulsingEdges: new Set(),
+  edgeData: {},
+  past: [],
+  future: [],
   abortController: null,
 
   onNodesChange: (changes) => {
@@ -90,14 +112,22 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 
   onConnect: (connection) => {
+    const currentSnapshot: HistorySnapshot = {
+      nodes: get().nodes,
+      edges: get().edges,
+    };
+
     const newEdge: Edge = {
       ...connection,
       id: `e_${connection.source}_${connection.target}_${Date.now()}`,
       type: 'pulseEdge',
       animated: false,
     };
+
     set({
       edges: addEdge(newEdge, get().edges),
+      past: [...get().past.slice(-MAX_HISTORY), currentSnapshot],
+      future: [],
     });
   },
 
@@ -119,6 +149,28 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     set({ isDebuggerOpen: !get().isDebuggerOpen });
   },
 
+  toggleBreakpoint: (nodeId) => {
+    set({
+      nodes: get().nodes.map((node) => {
+        if (node.id === nodeId) {
+          const hasBreakpoint = !node.data.hasBreakpoint;
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              hasBreakpoint,
+            },
+          };
+        }
+        return node;
+      }),
+      logs: [
+        ...get().logs,
+        `[Breakpoint] Toggled breakpoint on node: ${nodeId}`,
+      ],
+    });
+  },
+
   updateNodeConfig: (nodeId, newConfig) => {
     set({
       nodes: get().nodes.map((node) => {
@@ -128,6 +180,23 @@ export const useFlowStore = create<FlowState>((set, get) => ({
             data: {
               ...node.data,
               config: { ...node.data.config, ...newConfig },
+            },
+          };
+        }
+        return node;
+      }),
+    });
+  },
+
+  updateNodeData: (nodeId, partialData) => {
+    set({
+      nodes: get().nodes.map((node) => {
+        if (node.id === nodeId) {
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              ...partialData,
             },
           };
         }
@@ -154,17 +223,29 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 
   deleteNode: (nodeId) => {
+    const currentSnapshot: HistorySnapshot = {
+      nodes: get().nodes,
+      edges: get().edges,
+    };
+
     set({
       nodes: get().nodes.filter((n) => n.id !== nodeId),
       edges: get().edges.filter((e) => e.source !== nodeId && e.target !== nodeId),
       selectedNodeId: get().selectedNodeId === nodeId ? null : get().selectedNodeId,
       isDrawerOpen: get().selectedNodeId === nodeId ? false : get().isDrawerOpen,
+      past: [...get().past.slice(-MAX_HISTORY), currentSnapshot],
+      future: [],
     });
   },
 
   addNode: (subtype, position) => {
     const def = getNodeDefinition(subtype);
     if (!def) return;
+
+    const currentSnapshot: HistorySnapshot = {
+      nodes: get().nodes,
+      edges: get().edges,
+    };
 
     const id = `node_${subtype}_${Date.now()}`;
     const pos = position || {
@@ -195,7 +276,57 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       nodes: [...get().nodes, newNode],
       selectedNodeId: id,
       isDrawerOpen: true,
+      past: [...get().past.slice(-MAX_HISTORY), currentSnapshot],
+      future: [],
       logs: [...get().logs, `[Studio] Added node: ${def.displayName} (${id})`],
+    });
+  },
+
+  autoLayout: (direction = 'LR') => {
+    const currentSnapshot: HistorySnapshot = {
+      nodes: get().nodes,
+      edges: get().edges,
+    };
+
+    const organizedNodes = applyDagreLayout(get().nodes, get().edges, direction);
+
+    set({
+      nodes: organizedNodes,
+      past: [...get().past.slice(-MAX_HISTORY), currentSnapshot],
+      future: [],
+      logs: [...get().logs, `[Auto-Layout] Graph neatly organized (${direction}) using Dagre algorithm.`],
+    });
+  },
+
+  undo: () => {
+    const { past, future, nodes, edges } = get();
+    if (past.length === 0) return;
+
+    const previous = past[past.length - 1];
+    const newPast = past.slice(0, past.length - 1);
+
+    set({
+      nodes: previous.nodes,
+      edges: previous.edges,
+      past: newPast,
+      future: [{ nodes, edges }, ...future],
+      logs: [...get().logs, `[History] Undo applied.`],
+    });
+  },
+
+  redo: () => {
+    const { past, future, nodes, edges } = get();
+    if (future.length === 0) return;
+
+    const next = future[0];
+    const newFuture = future.slice(1);
+
+    set({
+      nodes: next.nodes,
+      edges: next.edges,
+      past: [...past, { nodes, edges }],
+      future: newFuture,
+      logs: [...get().logs, `[History] Redo applied.`],
     });
   },
 
@@ -203,7 +334,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     const tmpl = getTemplateById(templateId);
     if (!tmpl) return;
 
-    // Reset abort controller if running
     get().stopSimulation();
 
     set({
@@ -217,6 +347,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       currentStageIndex: 0,
       totalStages: 0,
       activePulsingEdges: new Set(),
+      edgeData: {},
+      past: [],
+      future: [],
       logs: [`[Template] Loaded: ${tmpl.name}`],
     });
   },
@@ -233,6 +366,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       currentStageIndex: 0,
       traces: [],
       activePulsingEdges: new Set(),
+      edgeData: {},
       nodes: get().nodes.map((node) => ({
         ...node,
         data: {
@@ -261,9 +395,8 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 
   runSimulation: async () => {
-    const { nodes, edges, simulationSpeed } = get();
+    const { nodes, edges, simulationSpeed, currentStageIndex } = get();
 
-    // Check DAG resolution first
     const dagResult = resolveDAG(nodes, edges);
     if (dagResult.hasCycle) {
       set({
@@ -277,22 +410,28 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     }
 
     const abortCtrl = new AbortController();
+    const startStage = get().runStatus === 'paused' ? currentStageIndex : 0;
 
-    // Reset statuses to idle before run
+    if (startStage === 0) {
+      set({
+        traces: [],
+        currentStageIndex: 0,
+        edgeData: {},
+        nodes: nodes.map((n) => ({
+          ...n,
+          data: { ...n.data, status: 'idle', outputs: undefined, error: undefined },
+        })),
+      });
+    }
+
     set({
       runStatus: 'running',
       abortController: abortCtrl,
-      traces: [],
       totalStages: dagResult.stages.length,
-      currentStageIndex: 0,
       activePulsingEdges: new Set(),
-      nodes: nodes.map((n) => ({
-        ...n,
-        data: { ...n.data, status: 'idle', outputs: undefined, error: undefined },
-      })),
       logs: [
         ...get().logs,
-        `[Run] Started simulation: ${nodes.length} nodes, ${edges.length} edges across ${dagResult.stages.length} stages.`,
+        `[Run] ${startStage > 0 ? 'Resuming' : 'Starting'} simulation: ${nodes.length} nodes across ${dagResult.stages.length} stages.`,
       ],
     });
 
@@ -302,7 +441,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
           currentStageIndex: stageIdx + 1,
           logs: [
             ...get().logs,
-            `[Stage ${stageIdx + 1}/${dagResult.stages.length}] Launching wave with nodes: [${nodeIds.join(', ')}]`,
+            `[Stage ${stageIdx + 1}/${dagResult.stages.length}] Launching wave: [${nodeIds.join(', ')}]`,
           ],
         });
       },
@@ -359,7 +498,25 @@ export const useFlowStore = create<FlowState>((set, get) => ({
               ? { ...n, data: { ...n.data, status: 'skipped' } }
               : n
           ),
-          logs: [...get().logs, `[Node ${nodeId}] Skipped by upstream conditional branch.`],
+          logs: [...get().logs, `[Node ${nodeId}] Skipped by upstream branch condition.`],
+        });
+      },
+      onNodeRetry: (nodeId, attempt, maxRetries) => {
+        set({
+          logs: [
+            ...get().logs,
+            `[Retry Policy] Node ${nodeId} attempt ${attempt}/${maxRetries} with exponential backoff...`,
+          ],
+        });
+      },
+      onBreakpointHit: (nodeId) => {
+        set({
+          runStatus: 'paused',
+          abortController: null,
+          logs: [
+            ...get().logs,
+            `🛑 [BREAKPOINT HIT] Simulation paused before entering node: ${nodeId}`,
+          ],
         });
       },
       onEdgePulse: (edgeId, active) => {
@@ -368,13 +525,32 @@ export const useFlowStore = create<FlowState>((set, get) => ({
         else nextSet.delete(edgeId);
         set({ activePulsingEdges: nextSet });
       },
+      onEdgeDataTransferred: (edgeId, payload) => {
+        set({
+          edgeData: {
+            ...get().edgeData,
+            [edgeId]: payload,
+          },
+        });
+      },
     });
 
     try {
       const outcome = await engine.runWorkflow(`run_${Date.now()}`, {
         simulationSpeed,
         signal: abortCtrl.signal,
+        startFromStage: startStage,
       });
+
+      if (outcome.pausedAtBreakpoint) {
+        set({
+          runStatus: 'paused',
+          traces: engine.getTraces(),
+          abortController: null,
+          activePulsingEdges: new Set(),
+        });
+        return;
+      }
 
       set({
         runStatus: outcome.success ? 'completed' : 'failed',
@@ -384,7 +560,7 @@ export const useFlowStore = create<FlowState>((set, get) => ({
         logs: [
           ...get().logs,
           outcome.success
-            ? `[Simulation Complete] All ${nodes.length} nodes resolved successfully.`
+            ? `[Simulation Complete] All active nodes resolved successfully.`
             : `[Simulation Finished with Errors] Review trace output.`,
         ],
       });
@@ -399,7 +575,6 @@ export const useFlowStore = create<FlowState>((set, get) => ({
   },
 
   stepSimulation: async () => {
-    // Single-step forward
     const { nodes, edges, currentStageIndex } = get();
     const dagResult = resolveDAG(nodes, edges);
 
@@ -432,8 +607,17 @@ export const useFlowStore = create<FlowState>((set, get) => ({
       ],
     });
 
-    // Execute this single wave
-    const engine = new WorkflowExecutionEngine(nodes as any, edges as any);
+    const engine = new WorkflowExecutionEngine(nodes as any, edges as any, {
+      onEdgeDataTransferred: (edgeId, payload) => {
+        set({
+          edgeData: {
+            ...get().edgeData,
+            [edgeId]: payload,
+          },
+        });
+      },
+    });
+
     for (const nodeId of stageNodeIds) {
       set({
         nodes: get().nodes.map((n) =>
@@ -477,6 +661,14 @@ export const useFlowStore = create<FlowState>((set, get) => ({
     return JSON.stringify(data, null, 2);
   },
 
+  exportStandaloneScript: () => {
+    return generateStandaloneScript({
+      name: 'FastFlow Exported Workflow',
+      nodes: get().nodes as any,
+      edges: get().edges as any,
+    });
+  },
+
   importWorkflow: (jsonStr) => {
     try {
       const parsed = JSON.parse(jsonStr);
@@ -490,6 +682,9 @@ export const useFlowStore = create<FlowState>((set, get) => ({
           runStatus: 'idle',
           traces: [],
           currentStageIndex: 0,
+          edgeData: {},
+          past: [],
+          future: [],
           logs: [...get().logs, `[Import] Successfully loaded custom workflow.`],
         });
         return true;

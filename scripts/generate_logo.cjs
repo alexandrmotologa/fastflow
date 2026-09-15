@@ -1,4 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+const fs = require('fs');
+const path = require('path');
+const { Resvg } = require('@resvg/resvg-js');
+
+function buildFalconLogoSvg() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
     <clipPath id="squircle-clip">
       <rect x="24" y="24" width="976" height="976" rx="220" />
@@ -175,4 +180,32 @@
 
     </g>
   </g>
-</svg>
+</svg>`;
+}
+
+async function renderLogo() {
+  const outputDir = path.join(__dirname, '..', 'docs', 'images');
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  const svg = buildFalconLogoSvg();
+  const svgPath = path.join(outputDir, 'logo.svg');
+  const pngPath = path.join(outputDir, 'logo.png');
+
+  fs.writeFileSync(svgPath, svg);
+  const resvg = new Resvg(svg, { fitTo: { mode: 'width', value: 1024 } });
+  const pngBuffer = resvg.render().asPng();
+  fs.writeFileSync(pngPath, pngBuffer);
+
+  // Also write to brain artifacts directory
+  const brainDir = 'C:\\Users\\alexander\\.gemini\\antigravity-ide\\brain\\e1fd86c6-1867-4d28-8e54-5220a497d8d1';
+  if (fs.existsSync(brainDir)) {
+    fs.writeFileSync(path.join(brainDir, 'logo.svg'), svg);
+    fs.writeFileSync(path.join(brainDir, 'logo.png'), pngBuffer);
+  }
+
+  console.log('✓ Successfully rendered official developer-branding falcon logo (logo.svg & logo.png at 1024x1024)');
+}
+
+renderLogo().catch(console.error);
